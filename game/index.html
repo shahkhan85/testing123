@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Third Person Shooter</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #000; overflow: hidden; font-family: 'Courier New', monospace; }
+    #canvas { display: block; }
+
+    #hud {
+      position: absolute;
+      top: 0; left: 0; width: 100%; height: 100%;
+      pointer-events: none;
+    }
+
+    #health-bar-container {
+      position: absolute;
+      bottom: 30px; left: 30px;
+      width: 200px;
+    }
+    #health-label {
+      color: #fff;
+      font-size: 13px;
+      margin-bottom: 4px;
+      text-shadow: 1px 1px 2px #000;
+    }
+    #health-bar-bg {
+      width: 100%;
+      height: 16px;
+      background: #333;
+      border: 2px solid #555;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    #health-bar {
+      height: 100%;
+      width: 100%;
+      background: linear-gradient(90deg, #e74c3c, #ff6b6b);
+      border-radius: 8px;
+      transition: width 0.1s, background 0.3s;
+    }
+
+    #ammo-display {
+      position: absolute;
+      bottom: 30px; right: 30px;
+      color: #fff;
+      font-size: 22px;
+      text-shadow: 1px 1px 3px #000;
+    }
+    #ammo-display span { color: #f39c12; }
+
+    #score-display {
+      position: absolute;
+      top: 20px; left: 50%;
+      transform: translateX(-50%);
+      color: #fff;
+      font-size: 20px;
+      text-shadow: 1px 1px 3px #000;
+      letter-spacing: 2px;
+    }
+
+    #wave-display {
+      position: absolute;
+      top: 52px; left: 50%;
+      transform: translateX(-50%);
+      color: #f39c12;
+      font-size: 14px;
+      text-shadow: 1px 1px 3px #000;
+      letter-spacing: 1px;
+    }
+
+    #crosshair {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 24px; height: 24px;
+      pointer-events: none;
+    }
+    #crosshair::before, #crosshair::after {
+      content: '';
+      position: absolute;
+      background: rgba(255,255,255,0.85);
+    }
+    #crosshair::before { width: 2px; height: 100%; left: 50%; transform: translateX(-50%); }
+    #crosshair::after  { height: 2px; width: 100%; top: 50%;  transform: translateY(-50%); }
+    #crosshair-dot {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%,-50%);
+      width: 4px; height: 4px;
+      border-radius: 50%;
+      background: rgba(255,80,80,0.9);
+    }
+
+    #kill-feed {
+      position: absolute;
+      top: 80px; right: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .kill-msg {
+      color: #2ecc71;
+      font-size: 13px;
+      text-shadow: 1px 1px 2px #000;
+      animation: fadeKill 2s forwards;
+    }
+    @keyframes fadeKill {
+      0%   { opacity:1; transform: translateX(0); }
+      70%  { opacity:1; }
+      100% { opacity:0; transform: translateX(30px); }
+    }
+
+    #overlay {
+      position: absolute;
+      top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0,0,0,0.78);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 18px;
+      pointer-events: all;
+    }
+    #overlay h1 {
+      color: #e74c3c;
+      font-size: 52px;
+      letter-spacing: 4px;
+      text-shadow: 0 0 20px #e74c3c;
+    }
+    #overlay .sub {
+      color: #aaa;
+      font-size: 16px;
+      letter-spacing: 2px;
+    }
+    #overlay .final-score {
+      color: #f39c12;
+      font-size: 28px;
+    }
+    #overlay button {
+      margin-top: 10px;
+      padding: 14px 40px;
+      font-size: 18px;
+      font-family: 'Courier New', monospace;
+      background: #e74c3c;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      letter-spacing: 2px;
+      transition: background 0.2s, transform 0.1s;
+    }
+    #overlay button:hover { background: #c0392b; transform: scale(1.04); }
+
+    #controls-hint {
+      position: absolute;
+      bottom: 80px; left: 50%;
+      transform: translateX(-50%);
+      color: rgba(255,255,255,0.45);
+      font-size: 12px;
+      letter-spacing: 1px;
+      text-align: center;
+      pointer-events: none;
+    }
+
+    #reload-indicator {
+      position: absolute;
+      bottom: 70px; right: 30px;
+      color: #f39c12;
+      font-size: 13px;
+      display: none;
+      animation: blink 0.5s infinite;
+    }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+    #damage-vignette {
+      position: absolute;
+      top:0;left:0;width:100%;height:100%;
+      pointer-events:none;
+      background: radial-gradient(ellipse at center, transparent 60%, rgba(220,30,30,0) 100%);
+      transition: background 0.1s;
+    }
+  </style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+
+<div id="hud">
+  <div id="damage-vignette"></div>
+
+  <div id="score-display">SCORE: <span id="score-val">0</span></div>
+  <div id="wave-display">WAVE <span id="wave-val">1</span></div>
+
+  <div id="health-bar-container">
+    <div id="health-label">HP: <span id="hp-val">100</span></div>
+    <div id="health-bar-bg"><div id="health-bar"></div></div>
+  </div>
+
+  <div id="ammo-display"><span id="ammo-val">30</span> / <span id="reserve-val">90</span></div>
+  <div id="reload-indicator">RELOADING...</div>
+
+  <div id="crosshair"><div id="crosshair-dot"></div></div>
+  <div id="kill-feed"></div>
+  <div id="controls-hint">WASD · MOVE &nbsp;|&nbsp; MOUSE · AIM &nbsp;|&nbsp; CLICK · SHOOT &nbsp;|&nbsp; R · RELOAD &nbsp;|&nbsp; SHIFT · SPRINT</div>
+</div>
+
+<div id="overlay">
+  <h1>SHADOW STRIKE</h1>
+  <div class="sub">THIRD PERSON SHOOTER</div>
+  <div class="sub" style="color:#555;font-size:13px;">WASD to move · Mouse to aim · Click to shoot · R to reload</div>
+  <button id="start-btn">START GAME</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="game.js"></script>
+</body>
+</html>
