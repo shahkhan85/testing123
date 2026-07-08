@@ -1,2 +1,0 @@
-test_id,date,dut_model,generation,panos_version,cyperf_version,scenario,tls_version,key_exchange,cipher,certificate,test_type,value,unit,fail_rate_pct,dut_cpu_pct,notes
-A1,2026-07-15,PA-3440,Gen4,11.2.4-h2,6.1.0,S1,1.2,ECDHE-P256,ECDHE-RSA-AES128-GCM-SHA256,RSA-2048,CPS,0,cps,0,0,replace-with-real-result
