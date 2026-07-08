@@ -67,6 +67,7 @@ The generator must always have more capacity than the DUT. PQC handshakes are CP
 Rules:
 
 - All DUTs run the **same PAN-OS major release** wherever the hardware supports it; otherwise record the difference — the comparison tool keys results by model *and* PAN-OS version.
+- **Group C (PQC) decryption cases require PAN-OS 12.1 or later** — 12.1 is the release whose decryption cipher matrix lists ML-KEM/Kyber, FrodoKEM, and BIKE groups (see Appendix A). Earlier releases run Group C as S0 pass-through only.
 - Identical rulebase across DUTs: one allow rule (client zone → server zone, application ssl/web-browsing), one decryption rule per scenario, logging at session end only, **no threat/URL profiles** (constant policy; see non-goals).
 - Content/app version pinned and identical across DUTs.
 
@@ -89,11 +90,18 @@ Every test case in §6 is executed under the applicable scenarios below. Scenari
 - **Unsupported-mode handling: set to *block*, not allow.** This is critical for the PQC cases — if the platform/release cannot decrypt a PQC handshake, the sessions must fail visibly rather than silently bypassing decryption and inflating results.
 - Verify decryption is actually occurring during each run: `show session all filter ssl-decrypt yes count yes` must track the active session count.
 
-### 4.2 PQC support caveats (verify before executing Group C)
+### 4.2 PQC support (PAN-OS 12.1 decryption matrix)
 
-- **ML-KEM:** FIPS 203. The deployed web standard is the **hybrid group X25519MLKEM768**; pure ML-KEM-768/1024 groups also exist. Confirm the PAN-OS release on the DUT supports these groups **in TLS decryption** (quantum-resistant IKEv2 support in PAN-OS 11.2 does *not* imply TLS decryption support — check the release notes/decryption profile options of your target release, e.g. PAN-OS 11.2+/12.x).
-- **FrodoKEM / BIKE:** not NIST-standardized (BIKE was a round-4 candidate; FrodoKEM is pursued in ISO). Support exists mainly via liboqs-based stacks. Expect these to be **pass-through-only (S0)** cases unless both CyPerf and PAN-OS explicitly support them in decryption; record `not-supported` outcomes as results — "cannot decrypt" is a finding, not a test error.
-- PQC handshakes have large key shares (ClientHello for ML-KEM hybrids exceeds one TCP MSS and will span multiple segments; FrodoKEM public keys are ~9–15 KB). Verify DUT behavior with fragmented ClientHellos in S0 before blaming decryption performance.
+PAN-OS 12.1 supports PQC key exchange **in decryption** in two tiers (full group list with exact configuration strings in Appendix A):
+
+- **PQC standard (ML-KEM / FIPS 203):** pure `mlkem512/768/1024`, the deployed-web-standard hybrid **`X25519MLKEM768`**, `SecP256r1MLKEM768`, NIST-curve/X448 hybrids (`p384_mlkem768`, `x448_mlkem768`, …), plus the **draft-Kyber names** (`kyber512/768/1024` and their hybrids) for interop with pre-standard client stacks. Kyber (draft) and ML-KEM (final) are *different wire groups* — test the ML-KEM names as primary; add a Kyber run only if you must interoperate with older clients.
+- **PQC experimental:** **FrodoKEM** (`frodo640aes/shake`, `frodo976aes/shake` + hybrids) and **BIKE** (`bikel1/l3/l5` + hybrids). These are decryptable on 12.1 despite not being NIST-standardized — so they run under S1, not just S0.
+
+Caveats that still apply:
+
+- Group C under S1 requires **PAN-OS 12.1+** on the DUT *and* a CyPerf release exposing the same group names. Verify both, and confirm the group actually negotiated (CyPerf handshake stats + firewall decrypt session count) before recording a result. On earlier PAN-OS, run Group C as S0 and record S1 as `not-supported`.
+- PQC handshakes have large key shares (ClientHello for ML-KEM hybrids exceeds one TCP MSS and spans multiple segments; FrodoKEM public keys are ~9–15 KB; BIKE ~1.5–5 KB). Verify DUT behavior with fragmented ClientHellos in S0 before attributing performance deltas to decryption.
+- Hybrid groups do **both** a classical and a PQC key exchange — expect hybrids to cost more than their pure-PQC counterparts; that delta is itself a P2 measurement (e.g., C2 vs C1).
 
 ---
 
@@ -102,9 +110,10 @@ Every test case in §6 is executed under the applicable scenarios below. Scenari
 | ID | Type | Details | Used by |
 |---|---|---|---|
 | CERT-RSA | RSA 2048, SHA-256 | CN=perf.test.local, 1-year validity | TLS 1.2/1.3 RSA cases |
-| CERT-RSA-3K (optional) | RSA 3072 | Sensitivity run for cert-size impact | Optional repeats |
+| CERT-RSA-3K / CERT-RSA-4K (optional) | RSA 3072 / 4096 | Key-size sensitivity runs (TC-D group) | Optional repeats of A1/B2 |
 | CERT-EC | ECDSA P-256, SHA-256 | Same CN/SAN as CERT-RSA | TLS 1.2/1.3 ECDSA cases |
 
+- PAN-OS decryption supports RSA server keys from 512 to 8192 bits, but in **forward proxy (S2) the firewall-generated resign certificate to the client supports at most RSA 4096** — so any key-size sensitivity testing above 4096 is S0/S1 only, and S2 client-side observations always reflect the resign cert, not the origin cert.
 - Same issuing chain (single intermediate) for both certs so chain length is constant.
 - For S1, import the leaf + key on the firewall. For S2, deploy the firewall's forward-trust CA into the CyPerf client profile.
 - Session resumption/tickets **disabled** for CPS tests (every connection must do a full handshake); a separate optional resumption case can be added later.
@@ -123,7 +132,11 @@ Certificate authentication is the server's signature algorithm; key exchange is 
 | A2 | 1.2 | ECDHE P-256 | ECDHE-RSA-AES256-GCM-SHA384 | RSA-2048 | P1 |
 | A3 | 1.2 | ECDHE P-256 | ECDHE-ECDSA-AES128-GCM-SHA256 | ECDSA P-256 | P1 |
 | A4 | 1.2 | ECDHE P-256 | ECDHE-ECDSA-AES256-GCM-SHA384 | ECDSA P-256 | P1 |
-| A5 | 1.2 | RSA (static, no PFS) | AES256-GCM-SHA384 | RSA-2048 | P3 (legacy reference) |
+| A5 | 1.2 | RSA (static, no PFS) | RSA-AES-256-GCM-SHA-384 | RSA-2048 | P3 (legacy reference) |
+| A6 | 1.2 | DHE 2048 | DHE-RSA-AES-256-GCM-SHA-384 | RSA-2048 | P3 (DHE vs ECDHE cost) |
+| A7 | 1.2 | ECDHE P-256 | ECDHE-RSA-AES-256-CBC-SHA-384 | RSA-2048 | P3 (CBC vs GCM cost) |
+
+All Group A suites are on the PAN-OS 12.1 decryption support list (Appendix A). Older suites on that list (RC4, 3DES, SHA-1-only CBC) are intentionally out of scope — they measure obsolete crypto, not deployable configurations; add them only if a legacy-traffic profile is explicitly required.
 
 ### Group B — TLS 1.3, classical
 
@@ -135,22 +148,39 @@ Certificate authentication is the server's signature algorithm; key exchange is 
 | B4 | 1.3 | x25519 | TLS_AES_256_GCM_SHA384 | ECDSA P-256 | P1 |
 | B5 | 1.3 | secp256r1 | TLS_AES_256_GCM_SHA384 | ECDSA P-256 | P2 |
 | B6 | 1.3 | x25519 | TLS_CHACHA20_POLY1305_SHA256 | ECDSA P-256 | P3 |
+| B7 | 1.3 | x448 | TLS_AES_256_GCM_SHA384 | ECDSA P-256 | P3 (X448 is TLS 1.3-only on PAN-OS) |
 
 ### Group C — TLS 1.3, post-quantum key exchange
 
-Cipher suite fixed at TLS_AES_256_GCM_SHA384, certificate fixed at ECDSA P-256 (repeat C1 with RSA-2048 as C1r if cert sensitivity is wanted). Only the key-exchange group varies — this isolates the PQC cost.
+Cipher suite fixed at TLS_AES_256_GCM_SHA384, certificate fixed at ECDSA P-256 (repeat C1 with RSA-2048 as C1r if cert sensitivity is wanted). Only the key-exchange group varies — this isolates the PQC cost. Group names below are the exact strings from the PAN-OS 12.1 decryption matrix (Appendix A); configure CyPerf with the identical string and confirm negotiation.
 
-| TC | Key-exchange group | Type | Priority | Support gate |
+**Decryptable on PAN-OS 12.1+ (S0 + S1); earlier releases: S0 only.**
+
+| TC | Key-exchange group | Type | Priority | Rationale |
 |---|---|---|---|---|
-| C1 | X25519MLKEM768 | Hybrid ML-KEM (deployed standard) | P1 | CyPerf + PAN-OS release check |
-| C2 | ML-KEM-768 (pure) | FIPS 203 | P1 | CyPerf + PAN-OS release check |
-| C3 | ML-KEM-1024 (pure) | FIPS 203 | P2 | CyPerf + PAN-OS release check |
-| C4 | FrodoKEM-640 | Non-standardized, conservative | P2 | Likely S0 only |
-| C5 | FrodoKEM-976 | Non-standardized | P3 | Likely S0 only |
-| C6 | BIKE-L1 | Round-4 candidate | P2 | Likely S0 only |
-| C7 | BIKE-L3 | Round-4 candidate | P3 | Likely S0 only |
+| C1 | `X25519MLKEM768` | Hybrid ML-KEM | P1 | The deployed web standard (browsers/CDNs) — the headline PQC number |
+| C2 | `mlkem768` | Pure ML-KEM (FIPS 203) | P1 | Isolates ML-KEM cost without the classical half; C2 vs C1 = hybrid overhead |
+| C3 | `mlkem1024` | Pure ML-KEM (FIPS 203) | P2 | Security-level scaling (cat 5) |
+| C4 | `SecP256r1MLKEM768` | Hybrid ML-KEM (NIST curve) | P2 | NIST-curve hybrid vs X25519 hybrid (C4 vs C1) |
+| C5 | `mlkem512` | Pure ML-KEM (FIPS 203) | P3 | Security-level scaling (cat 1) |
+| C6 | `kyber768` | Draft Kyber (pre-standard) | P3 | Interop with pre-standard client stacks only — different wire group than `mlkem768` |
+| C7 | `frodo640aes` | FrodoKEM (experimental tier) | P2 | Conservative unstructured-lattice KEM; large keys stress handshake buffering |
+| C8 | `frodo976aes` | FrodoKEM (experimental tier) | P3 | FrodoKEM level scaling |
+| C9 | `x25519_frodo640aes` | Hybrid FrodoKEM | P3 | Hybrid overhead on a large-key KEM |
+| C10 | `bikel1` | BIKE (experimental tier) | P2 | Code-based KEM, round-4 candidate |
+| C11 | `bikel3` | BIKE (experimental tier) | P3 | BIKE level scaling |
+| C12 | `bikel5` | BIKE (experimental tier) | P3 | BIKE cat-5 |
+
+Notes:
+
+- `aes` vs `shake` FrodoKEM variants differ only in the internal PRF; test the `aes` variants (hardware-accelerated on most CPUs) and add `shake` only if profiling the difference is a goal.
+- The full hybrid namespace (`p256_*`, `p384_*`, `p521_*`, `x448_*` variants) is supported (Appendix A) but not enumerated as test cases — the C1/C2/C4/C9 set already answers "what do hybrids cost"; add specific hybrids only if a customer profile mandates them.
 
 **Baseline pairing:** B4 (x25519, same cipher, same cert) is the classical reference for all Group C cases. The comparison tool computes PQC overhead against it automatically.
+
+### Group D (optional) — RSA key-size sensitivity
+
+Repeat B2 (TLS 1.3, x25519, RSA cert) and A1 with CERT-RSA-3K and CERT-RSA-4K. PAN-OS accepts server keys up to RSA 8192 for decryption, but S2 resign certs cap at RSA 4096 (§5) — keep this group at ≤ 4096 unless testing S0/S1 only. Priority P3.
 
 ### Execution grid
 
@@ -270,3 +300,48 @@ See `README.md` for options (baseline DUT selection, filtering).
 1. Completed `results/*.csv` per DUT (this schema).
 2. `comparison_report.html` generated by the tool.
 3. Summary narrative: decryption cost, PQC overhead, Gen4 vs Gen5 verdict per workload.
+
+---
+
+## Appendix A — PAN-OS 12.1 supported decryption ciphers (reference)
+
+Source: [Cipher Suites Supported in PAN-OS 12.1 — Decryption](https://docs.paloaltonetworks.com/compatibility-matrix/reference/supported-cipher-suites/cipher-suites-supported-in-pan-os-12-1/cipher-suites-supported-in-pan-os-12-1-decryption) (Palo Alto Networks compatibility matrix). Re-check this page against the exact PAN-OS version deployed before each campaign.
+
+### Protocols and keys
+
+- SSLv3, TLS 1.0, TLS 1.1, TLS 1.2, TLS 1.3 cipher suites.
+- RSA keys: 512 / 1024 / 2048 / 3072 / 4096 / 8192-bit. The firewall authenticates destination-server certificates up to RSA 8192, but the **firewall-generated (resign) certificate to the client supports at most RSA 4096** (forward proxy limit — see §5).
+
+### Non-PFS RSA suites
+
+`RSA-RC4-128-MD5`, `RSA-RC4-128-SHA-1`, `RSA-3DES-EDE-CBC-SHA-1`, `RSA-AES-128-CBC-SHA-1`, `RSA-AES-256-CBC-SHA-1`, `RSA-AES-128-CBC-SHA-256`, `RSA-AES-256-CBC-SHA-256`, `RSA-AES-128-GCM-SHA-256`, `RSA-AES-256-GCM-SHA-384`
+
+### TLS 1.3 suites
+
+`TLS_AES_128_GCM_SHA-256`, `TLS_AES_256_GCM_SHA-384`, `TLS_CHACHA20_POLY1305_SHA-256` (TLS 1.3 only)
+
+### PFS suites (DHE / ECDHE)
+
+DHE: `DHE-RSA-3DES-EDE-CBC-SHA-1`, `DHE-RSA-AES-128-CBC-SHA-1`, `DHE-RSA-AES-256-CBC-SHA-1`, `DHE-RSA-AES-128-CBC-SHA-256`, `DHE-RSA-AES-256-CBC-SHA-256`, `DHE-RSA-AES-128-GCM-SHA-256`, `DHE-RSA-AES-256-GCM-SHA-384`
+
+ECDHE-RSA: `ECDHE-RSA-AES-128-CBC-SHA-1`, `ECDHE-RSA-AES-256-CBC-SHA-1`, `ECDHE-RSA-AES-128-CBC-SHA-256`, `ECDHE-RSA-AES-256-CBC-SHA-384`, `ECDHE-RSA-AES-128-GCM-SHA-256`, `ECDHE-RSA-AES-256-GCM-SHA-384`
+
+ECDHE-ECDSA: `ECDHE-ECDSA-AES-128-CBC-SHA-1`, `ECDHE-ECDSA-AES-256-CBC-SHA-1`, `ECDHE-ECDSA-AES-128-CBC-SHA-256`, `ECDHE-ECDSA-AES-256-CBC-SHA-384`, `ECDHE-ECDSA-AES-128-GCM-SHA-256`, `ECDHE-ECDSA-AES-256-GCM-SHA-384`
+
+With PFS key exchange (DHE/ECDHE), an HSM can store the private keys used for SSL Inbound Inspection — if an HSM is in the production design, run S1 both with and without it, since HSM latency bounds CPS.
+
+### NIST-approved elliptic curves
+
+P-192/secp192r1 (TLS 1.2 only), P-224, P-256, P-384, P-521, X25519 (TLS 1.3 only), X448 (TLS 1.3 only)
+
+### PQC — standard tier (ML-KEM / draft Kyber)
+
+Pure: `mlkem512`, `mlkem768`, `mlkem1024`, `kyber512`, `kyber768`, `kyber1024`
+
+Hybrids: `X25519MLKEM768`, `SecP256r1MLKEM768`, `p256_mlkem512`, `x25519_mlkem512`, `p384_mlkem768`, `x448_mlkem768`, `p384_mlkem1024`, `p256_kyber512`, `p256_kyber768`, `x25519_kyber768`, `x448_kyber768`, `p384_kyber768`, `p521_kyber1024`
+
+### PQC — experimental tier
+
+FrodoKEM: `frodo640aes`, `frodo640shake`, `frodo976aes`, `frodo976shake` + hybrids `p256_frodo640aes`, `x25519_frodo640aes`, `p256_frodo640shake`, `x25519_frodo640shake`, `p384_frodo976aes`, `x448_frodo976aes`, `p384_frodo976shake`, `x448_frodo976shake`
+
+BIKE: `bikel1`, `bikel3`, `bikel5` + hybrids `p256_bikel1`, `x25519_bikel1`, `p384_bikel3`, `x448_bikel3`, `p521_bikel5`
