@@ -2,7 +2,7 @@
 
 **Traffic generator:** Keysight CyPerf (VM agents on VMware ESXi)
 **Devices under test (DUT):** Palo Alto Networks Gen4 and Gen5 hardware firewalls
-**Scope:** TLS 1.2 / TLS 1.3 classical (RSA & ECDSA certificates, ECDHE key exchange) and TLS 1.3 post-quantum key exchange (ML-KEM, FrodoKEM, BIKE)
+**Scope:** TLS 1.2 / TLS 1.3 classical (RSA & ECDSA certificates, ECDHE key exchange) and TLS 1.3 post-quantum key exchange (ML-KEM pure and hybrid groups)
 **Primary metrics:** maximum TLS connections per second (CPS) and maximum HTTPS throughput per test case
 **Output:** normalized CSV results feeding the comparison tool in `tools/compare_results.py`
 
@@ -12,13 +12,14 @@
 
 1. Measure, per DUT model, the maximum sustainable **TLS connection setup rate (CPS)** and **HTTPS throughput** for each TLS version / key-exchange / cipher / certificate combination.
 2. Quantify the **cost of SSL decryption** on the firewall by comparing decryption-enabled results against a pass-through (no-decrypt) baseline.
-3. Quantify the **overhead of post-quantum key exchange** (ML-KEM, FrodoKEM, BIKE) relative to classical X25519/ECDHE under otherwise identical conditions.
+3. Quantify the **overhead of post-quantum key exchange** (ML-KEM pure and hybrid groups) relative to classical X25519/ECDHE under otherwise identical conditions.
 4. Produce comparable, machine-readable results across Gen4 and Gen5 platforms so hardware generations can be ranked per workload via the comparison tool.
 
 ## 2. Non-goals
 
 - Long-duration soak/stability testing (separate plan).
 - IPsec/IKEv2 PQC testing (PAN-OS quantum-resistant VPN is a separate effort).
+- **FrodoKEM and BIKE key exchange** — PAN-OS 12.1 can decrypt them (Appendix A), but the installed CyPerf release does not expose these groups (verified in-lab), so there is no way to generate the traffic. Re-add as Group C cases if a future CyPerf release supports them.
 - Threat-prevention efficacy testing; security profiles are held constant, not evaluated.
 
 ---
@@ -54,7 +55,7 @@ The generator must always have more capacity than the DUT. PQC handshakes are CP
 | vNIC | **SR-IOV or PCI passthrough** on the test interfaces (VMXNET3 acceptable only for low-rate DUTs); dedicated 25/100G NICs for Gen5 throughput targets |
 | ESXi | Disable power management (High Performance), pin NUMA locality of NIC + VM, MTU consistent end-to-end |
 | Scale-out | Add agent VMs (CyPerf supports multi-agent scale-out per test) until the back-to-back calibration (§7.1) exceeds ~150% of the highest expected DUT number |
-| Version | CyPerf release with PQC cipher support — **verify that your installed release exposes ML-KEM (hybrid X25519MLKEM768 and pure ML-KEM), FrodoKEM, and BIKE groups** in the TLS settings of the application/attack profile. Record the exact CyPerf version in every result row. |
+| Version | CyPerf release with PQC cipher support — **verify that your installed release exposes the ML-KEM groups under test (hybrid X25519MLKEM768 and pure ML-KEM)** in the TLS settings of the application profile. (FrodoKEM/BIKE: verified not available in the current CyPerf release — see non-goals.) Record the exact CyPerf version in every result row. |
 
 ### 3.3 DUT inventory (fill in per lab)
 
@@ -67,7 +68,7 @@ The generator must always have more capacity than the DUT. PQC handshakes are CP
 Rules:
 
 - All DUTs run the **same PAN-OS major release** wherever the hardware supports it; otherwise record the difference — the comparison tool keys results by model *and* PAN-OS version.
-- **Group C (PQC) decryption cases require PAN-OS 12.1 or later** — 12.1 is the release whose decryption cipher matrix lists ML-KEM/Kyber, FrodoKEM, and BIKE groups (see Appendix A). Earlier releases run Group C as S0 pass-through only.
+- **Group C (PQC) decryption cases require PAN-OS 12.1 or later** — 12.1 is the release whose decryption cipher matrix lists the ML-KEM/Kyber groups (see Appendix A). Earlier releases run Group C as S0 pass-through only.
 - Identical rulebase across DUTs: one allow rule (client zone → server zone, application ssl/web-browsing), one decryption rule per scenario, logging at session end only, **no threat/URL profiles** (constant policy; see non-goals).
 - Content/app version pinned and identical across DUTs.
 
@@ -95,12 +96,12 @@ Every test case in §6 is executed under the applicable scenarios below. Scenari
 PAN-OS 12.1 supports PQC key exchange **in decryption** in two tiers (full group list with exact configuration strings in Appendix A):
 
 - **PQC standard (ML-KEM / FIPS 203):** pure `mlkem512/768/1024`, the deployed-web-standard hybrid **`X25519MLKEM768`**, `SecP256r1MLKEM768`, NIST-curve/X448 hybrids (`p384_mlkem768`, `x448_mlkem768`, …), plus the **draft-Kyber names** (`kyber512/768/1024` and their hybrids) for interop with pre-standard client stacks. Kyber (draft) and ML-KEM (final) are *different wire groups* — test the ML-KEM names as primary; add a Kyber run only if you must interoperate with older clients.
-- **PQC experimental:** **FrodoKEM** (`frodo640aes/shake`, `frodo976aes/shake` + hybrids) and **BIKE** (`bikel1/l3/l5` + hybrids). These are decryptable on 12.1 despite not being NIST-standardized — so they run under S1, not just S0.
+- **PQC experimental (FrodoKEM, BIKE):** decryptable on 12.1, but **out of scope for this plan** — the installed CyPerf release cannot generate these groups (see non-goals).
 
 Caveats that still apply:
 
 - Group C under S1 requires **PAN-OS 12.1+** on the DUT *and* a CyPerf release exposing the same group names. Verify both, and confirm the group actually negotiated (CyPerf handshake stats + firewall decrypt session count) before recording a result. On earlier PAN-OS, run Group C as S0 and record S1 as `not-supported`.
-- PQC handshakes have large key shares (ClientHello for ML-KEM hybrids exceeds one TCP MSS and spans multiple segments; FrodoKEM public keys are ~9–15 KB; BIKE ~1.5–5 KB). Verify DUT behavior with fragmented ClientHellos in S0 before attributing performance deltas to decryption.
+- PQC handshakes have large key shares — the ClientHello for ML-KEM hybrids exceeds one TCP MSS and spans multiple segments. Verify DUT behavior with fragmented ClientHellos in S0 before attributing performance deltas to decryption.
 - Hybrid groups do **both** a classical and a PQC key exchange — expect hybrids to cost more than their pure-PQC counterparts; that delta is itself a P2 measurement (e.g., C2 vs C1).
 
 ---
@@ -164,17 +165,11 @@ Cipher suite fixed at TLS_AES_256_GCM_SHA384, certificate fixed at ECDSA P-256 (
 | C4 | `SecP256r1MLKEM768` | Hybrid ML-KEM (NIST curve) | P2 | NIST-curve hybrid vs X25519 hybrid (C4 vs C1) |
 | C5 | `mlkem512` | Pure ML-KEM (FIPS 203) | P3 | Security-level scaling (cat 1) |
 | C6 | `kyber768` | Draft Kyber (pre-standard) | P3 | Interop with pre-standard client stacks only — different wire group than `mlkem768` |
-| C7 | `frodo640aes` | FrodoKEM (experimental tier) | P2 | Conservative unstructured-lattice KEM; large keys stress handshake buffering |
-| C8 | `frodo976aes` | FrodoKEM (experimental tier) | P3 | FrodoKEM level scaling |
-| C9 | `x25519_frodo640aes` | Hybrid FrodoKEM | P3 | Hybrid overhead on a large-key KEM |
-| C10 | `bikel1` | BIKE (experimental tier) | P2 | Code-based KEM, round-4 candidate |
-| C11 | `bikel3` | BIKE (experimental tier) | P3 | BIKE level scaling |
-| C12 | `bikel5` | BIKE (experimental tier) | P3 | BIKE cat-5 |
 
 Notes:
 
-- `aes` vs `shake` FrodoKEM variants differ only in the internal PRF; test the `aes` variants (hardware-accelerated on most CPUs) and add `shake` only if profiling the difference is a goal.
-- The full hybrid namespace (`p256_*`, `p384_*`, `p521_*`, `x448_*` variants) is supported (Appendix A) but not enumerated as test cases — the C1/C2/C4/C9 set already answers "what do hybrids cost"; add specific hybrids only if a customer profile mandates them.
+- **FrodoKEM and BIKE cases removed** — PAN-OS 12.1 supports them in decryption (Appendix A), but the installed CyPerf release cannot generate these groups (verified in-lab). Re-add here if a future CyPerf release supports them; reserve IDs C7+ for that.
+- The full hybrid namespace (`p256_*`, `p384_*`, `p521_*`, `x448_*` variants) is supported (Appendix A) but not enumerated as test cases — the C1/C2/C4 set already answers "what do hybrids cost"; add specific hybrids only if a customer profile mandates them.
 
 **Baseline pairing:** B4 (x25519, same cipher, same cert) is the classical reference for all Group C cases. The comparison tool computes PQC overhead against it automatically.
 
@@ -288,7 +283,7 @@ See `README.md` for options (baseline DUT selection, filtering).
 | CyPerf VM is the bottleneck, DUT numbers understated | §7.1 mandatory B2B calibration with ≥ 50% headroom; SR-IOV NICs |
 | PQC groups unsupported by CyPerf release or PAN-OS release | §4.2 support gate before scheduling lab time; record `not-supported` rows |
 | Decryption silently bypassed for unsupported ciphers → inflated "PQC" numbers | Unsupported-mode = block in decryption profile; §7.4 decrypt-session count check every run |
-| Fragmented ClientHello (ML-KEM hybrid, FrodoKEM) handled differently than small hellos | Run S0 first for Group C to establish pass-through behavior |
+| Fragmented ClientHello (ML-KEM hybrid) handled differently than small hellos | Run S0 first for Group C to establish pass-through behavior |
 | TLS 1.3 inbound inspection is a full proxy on modern PAN-OS — results are proxy performance, not passive decrypt | Expected and desired; note it in the report narrative |
 | Thermal/power differences across runs | Same rack conditions; 3-run median; spread rule in §7.2 |
 | PAN-OS version skew across DUTs | Record exact versions; comparison tool displays them next to each DUT |
@@ -340,7 +335,7 @@ Pure: `mlkem512`, `mlkem768`, `mlkem1024`, `kyber512`, `kyber768`, `kyber1024`
 
 Hybrids: `X25519MLKEM768`, `SecP256r1MLKEM768`, `p256_mlkem512`, `x25519_mlkem512`, `p384_mlkem768`, `x448_mlkem768`, `p384_mlkem1024`, `p256_kyber512`, `p256_kyber768`, `x25519_kyber768`, `x448_kyber768`, `p384_kyber768`, `p521_kyber1024`
 
-### PQC — experimental tier
+### PQC — experimental tier (PAN-OS-supported, out of test scope — no CyPerf support)
 
 FrodoKEM: `frodo640aes`, `frodo640shake`, `frodo976aes`, `frodo976shake` + hybrids `p256_frodo640aes`, `x25519_frodo640aes`, `p256_frodo640shake`, `x25519_frodo640shake`, `p384_frodo976aes`, `x448_frodo976aes`, `p384_frodo976shake`, `x448_frodo976shake`
 

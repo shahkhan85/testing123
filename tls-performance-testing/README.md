@@ -2,8 +2,10 @@
 
 Performance test plan and result-comparison tooling for TLS 1.2 / TLS 1.3
 (classical RSA/ECDSA + ECDHE) and TLS 1.3 post-quantum key exchange
-(ML-KEM, FrodoKEM, BIKE), generated with Keysight CyPerf VM agents on ESXi
-against Palo Alto Networks Gen4 and Gen5 hardware firewalls.
+(ML-KEM pure and hybrid groups), generated with Keysight CyPerf VM agents on
+ESXi against Palo Alto Networks Gen4 and Gen5 hardware firewalls.
+(FrodoKEM/BIKE are out of scope: PAN-OS 12.1 can decrypt them but the
+installed CyPerf release cannot generate them.)
 
 ## Contents
 
